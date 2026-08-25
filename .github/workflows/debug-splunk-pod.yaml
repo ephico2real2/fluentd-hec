@@ -1,0 +1,62 @@
+# TEMPORARY DIAGNOSTIC — delete after the splunk-pod sudo/PAM failure is resolved.
+#
+# The func-test splunk pod fails ansible's first task on GitHub runners with
+#   sudo: PAM account management error: Authentication service cannot retrieve authentication info
+# under BOTH minikube runtimes (docker://29, containerd), while the identical pod spec provisions
+# cleanly on a local kind cluster and in plain docker run. This workflow reproduces the CI
+# environment and dumps the low-level facts that differ (setuid, NoNewPrivs, seccomp, caps,
+# uid_map, mount flags, pam/sudo versions) so the fix targets the mechanism, not a guess.
+name: Debug splunk pod sudo
+
+on:
+  workflow_dispatch:
+
+env:
+  KUBERNETES_VERSION: v1.34.11
+  MINIKUBE_VERSION: v1.38.1
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Start minikube (same pins as func-test)
+        run: |
+          curl -fsSLo kubectl https://dl.k8s.io/release/${KUBERNETES_VERSION}/bin/linux/amd64/kubectl
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl -Lo minikube https://storage.googleapis.com/minikube/releases/${MINIKUBE_VERSION}/minikube-linux-amd64
+          chmod +x minikube && sudo mv minikube /usr/local/bin/
+          minikube start --driver=docker --container-runtime=containerd --cpus 2 --memory 4096 --kubernetes-version=${KUBERNETES_VERSION} --no-vtx-check -n=1
+          kubectl wait --for=condition=Ready node --all --timeout=300s
+
+      - name: Debug pod diagnostics
+        run: |
+          cat > /tmp/dbg.yaml <<'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: splunk-debug
+          spec:
+            hostNetwork: true
+            containers:
+            - name: dbg
+              image: splunk/splunk:latest
+              command: ["sleep", "900"]
+          EOF
+          kubectl apply -f /tmp/dbg.yaml
+          kubectl wait --for=condition=Ready pod/splunk-debug --timeout=300s
+          kubectl exec splunk-debug -- bash -c '
+            echo "== id:"; id
+            echo "== sudo binary:"; ls -l /usr/bin/sudo
+            echo "== shadow:"; ls -l /etc/shadow
+            echo "== sudoers.d:"; ls -l /etc/sudoers.d/ 2>/dev/null
+            echo "== proc status:"; grep -E "NoNewPrivs|Seccomp:|CapEff|CapBnd" /proc/self/status
+            echo "== uid_map:"; cat /proc/self/uid_map
+            echo "== gid_map:"; cat /proc/self/gid_map
+            echo "== root mount flags:"; awk "\$5==\"/\" {print \$6}" /proc/self/mountinfo
+            echo "== versions:"; rpm -q pam sudo 2>/dev/null
+            echo "== THE TEST — sudo -n id:"
+            sudo -n id; echo "sudo rc=$?"
+          ' || true
+          echo "== node info:"
+          kubectl get nodes -o wide
