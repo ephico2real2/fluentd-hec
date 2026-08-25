@@ -77,6 +77,9 @@ jobs:
     needs:
       - unit-test
     runs-on: ubuntu-latest
+    # deploy_connector.sh waits for the pod count in an unbounded loop; if an image can never be
+    # pulled the job would otherwise sit at the 6-hour default. A healthy run fits well inside this.
+    timeout-minutes: 60
     env:
       CI_SPLUNK_PORT: 8089
       CI_SPLUNK_USERNAME: admin
@@ -85,7 +88,13 @@ jobs:
       CI_INDEX_EVENTS: ci_events
       CI_INDEX_OBJECTS: ci_objects
       CI_INDEX_METRICS: ci_metrics
-      KUBERNETES_VERSION: v1.23.2
+      # minikube v1.38.1 refuses anything below v1.28.0 ("Exiting due to K8S_OLD_UNSUPPORTED",
+      # exit 106), so upstream's v1.23.2 can no longer start at all. v1.34 is the newest
+      # upstream-supported minor that is still at or below minikube's newest-TESTED version
+      # (v1.35.1) — no floor error, no "newer than newest supported" warning, and no --force,
+      # which would poison exactly the signal this test exists to produce. This variable also
+      # pins the kubectl download below.
+      KUBERNETES_VERSION: v1.34.11
       MINIKUBE_VERSION: latest
       MINIKUBE_NODE_COUNTS: 2
       GITHUB_ACTIONS: true
@@ -129,8 +138,10 @@ jobs:
 
       - name: Setup Minikube
         run: |
-          # Install Kubectl
-          curl -Lo kubectl https://storage.googleapis.com/kubernetes-release/release/${KUBERNETES_VERSION}/bin/linux/amd64/kubectl
+          # Install Kubectl. dl.k8s.io is the canonical host; the old kubernetes-release GCS
+          # bucket was frozen and never received the newer releases. -f makes an HTTP error fail
+          # the step instead of saving an error page as the "binary".
+          curl -fsSLo kubectl https://dl.k8s.io/release/${KUBERNETES_VERSION}/bin/linux/amd64/kubectl
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
           mkdir -p ${HOME}/.kube
@@ -192,9 +203,11 @@ jobs:
           kubectl apply -f test/test_setup.yaml
           sleep 60
 
+      # 3.7 has no build for ubuntu-24.04 in actions/python-versions (its manifest stops at
+      # 22.04), so requesting it on ubuntu-latest fails before pip ever runs.
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.7
+          python-version: '3.12'
 
       - name: Run functional tests
         run: |
