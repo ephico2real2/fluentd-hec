@@ -76,11 +76,17 @@ jobs:
           kubectl wait --for=condition=Ready pod/splunk-debug-root --timeout=300s
           kubectl exec splunk-debug-root -- bash -c '
             echo "== root id:"; id
+            echo "== ROOT FILESYSTEM TYPE (the suspect):"
+            stat -f -c "fstype=%T" /
+            awk "\$5==\"/\"" /proc/self/mountinfo
+            echo "== can root read the mode-000 shadow?"
+            getent shadow root >/dev/null; echo "getent shadow rc=$?"
+            head -c 20 /etc/shadow >/dev/null 2>&1; echo "direct read rc=$?"
             echo "== root sudo test:"; sudo -n id; echo "rc=$?"
             microdnf -y install strace >/dev/null 2>&1 || dnf -y install strace >/dev/null 2>&1 || yum -y install strace >/dev/null 2>&1
-            echo "== strace of ansible-user sudo (interesting syscalls only):"
-            runuser -u ansible -- strace -f -qq -e trace=openat,open,connect,socket,access,faccessat2,statx sudo -n id 2>&1 \
-              | grep -E "shadow|sss|passwd|nss|pam|EACCES|EPERM|ENOENT|ECONNREFUSED" | tail -40
+            echo "== strace tail of failing sudo (unfiltered file trace):"
+            strace -f -qq -s 200 -e trace=file -o /tmp/tr sudo -n id 2>&1 | tail -2
+            grep -E "shadow|EACCES|EPERM" /tmp/tr | tail -20
           ' || true
           echo "== node info:"
           kubectl get nodes -o wide
