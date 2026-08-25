@@ -47,16 +47,40 @@ jobs:
           kubectl wait --for=condition=Ready pod/splunk-debug --timeout=300s
           kubectl exec splunk-debug -- bash -c '
             echo "== id:"; id
-            echo "== sudo binary:"; ls -l /usr/bin/sudo
-            echo "== shadow:"; ls -l /etc/shadow
-            echo "== sudoers.d:"; ls -l /etc/sudoers.d/ 2>/dev/null
-            echo "== proc status:"; grep -E "NoNewPrivs|Seccomp:|CapEff|CapBnd" /proc/self/status
-            echo "== uid_map:"; cat /proc/self/uid_map
-            echo "== gid_map:"; cat /proc/self/gid_map
-            echo "== root mount flags:"; awk "\$5==\"/\" {print \$6}" /proc/self/mountinfo
-            echo "== versions:"; rpm -q pam sudo 2>/dev/null
+            echo "== apparmor label:"; cat /proc/self/attr/current 2>/dev/null || echo "(absent)"
+            echo "== securebits/ambient:"; grep -E "SecBits|CapAmb|NoNewPrivs|Seccomp:" /proc/self/status
             echo "== THE TEST — sudo -n id:"
             sudo -n id; echo "sudo rc=$?"
+          ' || true
+
+          # Root pod: strace the failing sudo from a user context, so the exact syscall that
+          # returns the error is visible. This is the ground-truth probe.
+          cat > /tmp/dbg-root.yaml <<'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: splunk-debug-root
+          spec:
+            hostNetwork: true
+            containers:
+            - name: dbg
+              image: splunk/splunk:latest
+              command: ["sleep", "900"]
+              securityContext:
+                runAsUser: 0
+                runAsGroup: 0
+                capabilities:
+                  add: ["SYS_PTRACE"]
+          EOF
+          kubectl apply -f /tmp/dbg-root.yaml
+          kubectl wait --for=condition=Ready pod/splunk-debug-root --timeout=300s
+          kubectl exec splunk-debug-root -- bash -c '
+            echo "== root id:"; id
+            echo "== root sudo test:"; sudo -n id; echo "rc=$?"
+            microdnf -y install strace >/dev/null 2>&1 || dnf -y install strace >/dev/null 2>&1 || yum -y install strace >/dev/null 2>&1
+            echo "== strace of ansible-user sudo (interesting syscalls only):"
+            runuser -u ansible -- strace -f -qq -e trace=openat,open,connect,socket,access,faccessat2,statx sudo -n id 2>&1 \
+              | grep -E "shadow|sss|passwd|nss|pam|EACCES|EPERM|ENOENT|ECONNREFUSED" | tail -40
           ' || true
           echo "== node info:"
           kubectl get nodes -o wide
