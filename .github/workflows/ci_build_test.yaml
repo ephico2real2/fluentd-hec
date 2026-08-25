@@ -77,11 +77,12 @@ jobs:
     needs:
       - unit-test
     runs-on: ubuntu-latest
-    # BACKSTOP. Every wait below is individually bounded, but a hang somewhere else would otherwise
-    # burn GitHub's 6-hour default before anyone noticed. A run of this shape takes ~15 minutes.
-    timeout-minutes: 45
-    # deploy_connector.sh waits for the pod count in an unbounded loop; if an image can never be
-    # pulled the job would otherwise sit at the 6-hour default. A healthy run fits well inside this.
+    # BACKSTOP. Every wait below is individually bounded, but deploy_connector.sh waits for the pod
+    # count in an unbounded loop — if an image can never be pulled, the job would otherwise sit at
+    # GitHub's 6-hour default before anyone noticed. A healthy run of this shape takes ~15 minutes,
+    # so an hour is generous without being open-ended. (ONE key only: two commits each added their
+    # own timeout-minutes and the duplicate made the whole workflow file invalid — Actions refuses
+    # to parse it, so nothing runs at all.)
     timeout-minutes: 60
     env:
       CI_SPLUNK_PORT: 8089
