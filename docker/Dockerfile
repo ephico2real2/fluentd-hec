@@ -21,7 +21,7 @@ LABEL name="Splunk Connect for Kubernetes Logging container" \
       description="Splunk Connect for Kubernetes Logging container"
 
 ENV VERSION=${VERSION}
-ENV FLUENT_USER fluent
+ENV FLUENT_USER=fluent
 
 # GEM_HOME AND BUNDLE_PATH MUST BE PINNED, or the image builds clean, scans clean, and cannot boot.
 #
@@ -96,4 +96,10 @@ RUN groupadd -r $FLUENT_USER && \
    chmod +t /tmp
 
 USER $FLUENT_USER
-CMD bundle exec fluentd -c /fluentd/etc/fluent.conf
+# EXEC FORM, NOT SHELL FORM. With `CMD bundle exec ...` docker runs it via /bin/sh -c, so PID 1
+# is the shell and fluentd is its child. The shell does not forward signals, so a Kubernetes
+# SIGTERM on pod deletion never reaches fluentd: it is not flushed, in-flight events are lost,
+# and the kubelet SIGKILLs it after the grace period. Exec form makes fluentd PID 1 and gives it
+# the signal directly. This also silences docker's JSONArgsRecommended warning, but the reason
+# to do it is the lost telemetry, not the warning.
+CMD ["bundle", "exec", "fluentd", "-c", "/fluentd/etc/fluent.conf"]
