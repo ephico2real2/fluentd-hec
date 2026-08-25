@@ -49,9 +49,9 @@ GEM
     attr_required (1.0.1)
     base64 (0.3.0)
     bigdecimal (4.1.2)
-    bindata (2.4.14)
+    bindata (3.0.0)
     concurrent-ruby (1.3.8)
-    connection_pool (2.3.0)
+    connection_pool (2.5.5)
     console (1.37.0)
       fiber-annotation
       fiber-local (~> 1.1)
@@ -60,6 +60,7 @@ GEM
     crack (0.4.5)
       rexml
     csv (3.3.6)
+    date (3.5.1)
     digest (3.1.0)
     docile (1.4.0)
     drb (2.2.3)
@@ -96,7 +97,8 @@ GEM
       zstd-ruby (~> 1.5)
     hashdiff (1.0.1)
     http_parser.rb (0.8.1)
-    httpclient (2.8.3)
+    httpclient (2.9.0)
+      mutex_m
     i18n (1.15.2)
       concurrent-ruby (~> 1.0)
     io-endpoint (0.18.0)
@@ -106,22 +108,32 @@ GEM
       openssl (>= 3.3)
     io-wait (0.2.1)
     json (2.21.2)
-    json-jwt (1.15.3)
+    json-jwt (1.15.3.1)
       activesupport (>= 4.2)
       aes_key_wrap
       bindata
       httpclient
     logger (1.7.0)
-    mail (2.7.1)
+    mail (2.9.1)
+      logger
       mini_mime (>= 0.1.1)
-    mini_mime (1.1.2)
+      net-imap
+      net-pop
+      net-smtp
+    mini_mime (1.1.5)
     minitest (5.27.0)
     msgpack (1.8.4)
     multi_json (1.15.0)
+    mutex_m (0.3.0)
     net-http (0.9.1)
       uri (>= 0.11.1)
     net-http-persistent (4.0.1)
       connection_pool (~> 2.2)
+    net-imap (0.6.6)
+      date
+      net-protocol
+    net-pop (0.1.2)
+      net-protocol
     net-protocol (0.1.2)
       io-wait
       timeout
