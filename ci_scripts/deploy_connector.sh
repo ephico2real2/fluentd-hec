@@ -42,7 +42,24 @@ kubectl get pod
 # wait for deployment to finish
 # metric and logging deamon set for each node + aggr + object + splunk
 PODS=$((MINIKUBE_NODE_COUNTS*2+2+1))
-until kubectl get pod | grep Running | [[ $(wc -l) == $PODS ]]; do
+
+# BOUNDED, and it dumps why on failure. Unbounded, this waits forever for a pod count that may never
+# arrive — an ImagePullBackOff or a scheduling failure looks identical to "still starting", and the
+# only output is the same `kubectl get pod` table repeating until the job is killed.
+deadline=$(( $(date +%s) + 420 ))
+until [ "$(kubectl get pod --no-headers 2>/dev/null | grep -c ' Running ')" -ge "$PODS" ]; do
+   if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "::error::only $(kubectl get pod --no-headers | grep -c ' Running ') of $PODS pods Running after 420s"
+      kubectl get pod -o wide || true
+      kubectl get events --sort-by=.lastTimestamp | tail -30 || true
+      for p in $(kubectl get pod --no-headers -o custom-columns=:metadata.name | grep -v '^splunk$'); do
+         echo "--- $p ---"
+         kubectl describe pod "$p" | grep -A12 'Events:' || true
+         kubectl logs "$p" --tail=30 2>/dev/null || true
+      done
+      exit 1
+   fi
    kubectl get pod
-   sleep 2;
+   sleep 5
 done
+echo "all $PODS pods Running"
