@@ -54,6 +54,23 @@ spec:
       value: changeme2
     - name: SPLUNK_LAUNCH_CONF
       value: OPTIMISTIC_ABOUT_FILE_LOCKING=1
+    # LAB LICENSE, FOR >500 MB/day EXPERIMENTS — the image's OWN mechanism, no circumvention.
+    # environ.py maps SPLUNK_LICENSE_URI -> ansible add_license.yml -> `splunk add licenses <file>`,
+    # so pointing it at a real license file the pod can read installs that license's quota.
+    #
+    # The default (no SPLUNK_LICENSE_URI) is the 60-day Enterprise TRIAL: 500 MB/day, and a fresh
+    # 60-day clock every time this pod is recreated — so a torn-down/redeployed lab never expires.
+    # Two facts that usually make a bigger license unnecessary for a lab:
+    #   * Splunk does NOT drop data over-quota. Exceeding 500 MB/day only logs a license-violation
+    #     warning; indexing continues, and only 5 violations in a rolling 30 days restrict SEARCH
+    #     (indexing keeps running even then). Short burst tests just accrue warnings that age out.
+    #   * A recreate resets the trial, so sustained trial use is fine for a disposable lab.
+    # For SUSTAINED >500 MB/day with Enterprise features + auth intact, get a free Splunk Developer
+    # License (10 GB/day, renewable) from your Splunk account, drop its XML into the ConfigMap at the
+    # bottom of this file, and uncomment the env + mount below. This installs a license Splunk issued
+    # you — it does not tamper with license enforcement.
+    # - name: SPLUNK_LICENSE_URI
+    #   value: file:///tmp/splunk-lab-license/splunk.lic
     volumeMounts:
     # A single-FILE mount via subPath, not a directory mount. Mounting the configMap over
     # /etc/sudoers.d makes kubelet's projected directory world-writable and sudo then refuses the
@@ -63,8 +80,28 @@ spec:
       mountPath: /etc/sudoers.d/00-ci-no-pam-acct
       subPath: 00-ci-no-pam-acct
       readOnly: true
+    # Paired with the SPLUNK_LICENSE_URI env above — uncomment both to install a lab license.
+    # - name: lab-license
+    #   mountPath: /tmp/splunk-lab-license
+    #   readOnly: true
   volumes:
   - name: ci-sudoers
     configMap:
       name: splunk-ci-sudoers
       defaultMode: 288  # 0440 - sudoers files must be root-owned and not world-writable
+  # - name: lab-license
+  #   configMap:
+  #     name: splunk-lab-license
+# ---
+# LAB LICENSE ConfigMap (default-off). To run >500 MB/day sustained: obtain a free Splunk Developer
+# License (10 GB/day) from your Splunk account, paste its XML below replacing the placeholder, then
+# uncomment this whole document AND the SPLUNK_LICENSE_URI env + lab-license mount above. A ConfigMap
+# holds a license fine (it is not a secret — it is issued to you and carries no credential).
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: splunk-lab-license
+# data:
+#   splunk.lic: |
+#     <?xml version="1.0" encoding="UTF-8"?>
+#     <!-- paste your Splunk Developer/dev-test license XML here -->
