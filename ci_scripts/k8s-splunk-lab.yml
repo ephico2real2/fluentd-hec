@@ -1,0 +1,143 @@
+# LAB VARIANT of k8s-splunk.yml — PERSISTENT Splunk for the local kind lab. The CI manifest stays
+# deliberately stateless (fresh trial clock and clean reprovisioning on every recreate); THIS one
+# adds a PVC on kind's default StorageClass mounted at docker-splunk's two documented persistence
+# paths (/opt/splunk/etc and /opt/splunk/var), so indexes, config, HEC token and license state
+# survive pod recreation. Consequences, stated plainly: your data outlives restarts, and so does
+# the trial clock — no more reset-on-recreate. Apply ONE of the two manifests at a time (both use
+# pod name 'splunk' and the same host ports).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: splunk-lab-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 10Gi
+---
+# CI-ONLY SUDOERS DROP-IN — the diagnosis is measured, not guessed. On GitHub runners (minikube,
+# BOTH docker and containerd runtimes) sudo inside this image fails its PAM account phase: strace
+# shows the privilege-dropped child that hardened pam_unix forks getting EACCES opening the
+# mode-000 /etc/shadow, and pam returns "Authentication service cannot retrieve authentication
+# info" (PAM_AUTHINFO_UNAVAIL) — ansible's first task dies and the pod crashloops. The identical
+# pod spec, same image DIGEST, provisions cleanly on kind and in plain docker; only this
+# environment's fallback path fails. `Defaults !pam_acct_mgmt` skips exactly the failing PAM call;
+# sudoers policy itself (who may sudo, NOPASSWD) still applies. The image's /etc/sudoers.d is
+# empty (verified in both environments), so mounting over it loses nothing. The filename carries
+# no dot: sudoers.d silently ignores entries containing '.'.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: splunk-ci-sudoers
+data:
+  00-ci-no-pam-acct: |
+    Defaults !pam_acct_mgmt
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: splunk
+spec:
+  hostNetwork: true
+  # NO root securityContext, and no SPLUNK_USER=root: splunk/splunk:latest hard-refuses
+  # `splunk start` as root ("Running Splunk Enterprise as root is deprecated ... use the
+  # --run-as-root option"), the image's ansible exposes no run-as-root knob, and the pod
+  # crashlooped with exit 2 on the 'Start Splunk via CLI' task. The container's default
+  # non-root user completes the playbook cleanly - verified by running the image both
+  # ways. All ports are >1024, so hostNetwork needs no root either.
+  containers:
+  - name: splunk
+    image: splunk/splunk:latest
+    ports:
+    - containerPort: 8000
+      hostPort: 8000
+      protocol: TCP
+    - containerPort: 8088
+      hostPort: 8088
+      protocol: TCP
+    - containerPort: 8089
+      hostPort: 8089
+      protocol: TCP
+    env:
+    - name: SPLUNK_START_ARGS
+      value: --accept-license
+    # Newer splunk/splunk images refuse to start on --accept-license alone: the entrypoint also
+    # demands acceptance of the Splunk General Terms, and without it the pod crashloops printing
+    # "License not accepted, please adjust SPLUNK_GENERAL_TERMS and/or SPLUNK_START_ARGS". This is
+    # the exact flag the container's own error message prescribes; older images ignore it.
+    - name: SPLUNK_GENERAL_TERMS
+      value: --accept-sgt-current-at-splunk-com
+    - name: SPLUNK_PASSWORD
+      value: changeme2
+    - name: SPLUNK_LAUNCH_CONF
+      value: OPTIMISTIC_ABOUT_FILE_LOCKING=1
+    # LAB ONLY — deterministic HEC token, provisioned by ansible on EVERY start. Measured need:
+    # with the PVC, indexed data and indexes.conf survive recreation, but ansible rewrites the
+    # files it manages — including splunk_httpinput's inputs.conf — clobbering a token created by
+    # REST. environ.py maps this env straight into that provisioning, so the token is part of the
+    # pod spec and no post-start curl setup is ever needed.
+    - name: SPLUNK_HEC_TOKEN
+      value: a6b5e77f-d5f6-415a-bd43-930cecb12959
+    # LAB LICENSE, FOR >500 MB/day EXPERIMENTS — the image's OWN mechanism, no circumvention.
+    # environ.py maps SPLUNK_LICENSE_URI -> ansible add_license.yml -> `splunk add licenses <file>`,
+    # so pointing it at a real license file the pod can read installs that license's quota.
+    #
+    # The default (no SPLUNK_LICENSE_URI) is the 60-day Enterprise TRIAL: 500 MB/day, and a fresh
+    # 60-day clock every time this pod is recreated — so a torn-down/redeployed lab never expires.
+    # Two facts that usually make a bigger license unnecessary for a lab:
+    #   * Splunk does NOT drop data over-quota. Exceeding 500 MB/day only logs a license-violation
+    #     warning; indexing continues, and only 5 violations in a rolling 30 days restrict SEARCH
+    #     (indexing keeps running even then). Short burst tests just accrue warnings that age out.
+    #   * A recreate resets the trial, so sustained trial use is fine for a disposable lab.
+    # For SUSTAINED >500 MB/day with Enterprise features + auth intact, get a free Splunk Developer
+    # License (10 GB/day, renewable) from your Splunk account, drop its XML into the ConfigMap at the
+    # bottom of this file, and uncomment the env + mount below. This installs a license Splunk issued
+    # you — it does not tamper with license enforcement.
+    # - name: SPLUNK_LICENSE_URI
+    #   value: file:///tmp/splunk-lab-license/splunk.lic
+    volumeMounts:
+    # A single-FILE mount via subPath, not a directory mount. Mounting the configMap over
+    # /etc/sudoers.d makes kubelet's projected directory world-writable and sudo then refuses the
+    # whole directory ("sudo: /etc/sudoers.d is world writable") before reading any file in it.
+    # With subPath only the file itself is projected; the directory stays the image's own 0750.
+    - name: ci-sudoers
+      mountPath: /etc/sudoers.d/00-ci-no-pam-acct
+      subPath: 00-ci-no-pam-acct
+      readOnly: true
+    # docker-splunk's documented persistence mounts; the image's ansible handles first-run
+    # population of both directories.
+    - name: lab-data
+      mountPath: /opt/splunk/etc
+      subPath: etc
+    - name: lab-data
+      mountPath: /opt/splunk/var
+      subPath: var
+    # Paired with the SPLUNK_LICENSE_URI env above — uncomment both to install a lab license.
+    # - name: lab-license
+    #   mountPath: /tmp/splunk-lab-license
+    #   readOnly: true
+  volumes:
+  - name: lab-data
+    persistentVolumeClaim:
+      claimName: splunk-lab-data
+  - name: ci-sudoers
+    configMap:
+      name: splunk-ci-sudoers
+      defaultMode: 288  # 0440 - sudoers files must be root-owned and not world-writable
+  # - name: lab-license
+  #   configMap:
+  #     name: splunk-lab-license
+# ---
+# LAB LICENSE ConfigMap (default-off). To run >500 MB/day sustained: obtain a free Splunk Developer
+# License (10 GB/day) from your Splunk account, paste its XML below replacing the placeholder, then
+# uncomment this whole document AND the SPLUNK_LICENSE_URI env + lab-license mount above. A ConfigMap
+# holds a license fine (it is not a secret — it is issued to you and carries no credential).
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: splunk-lab-license
+# data:
+#   splunk.lic: |
+#     <?xml version="1.0" encoding="UTF-8"?>
+#     <!-- paste your Splunk Developer/dev-test license XML here -->
